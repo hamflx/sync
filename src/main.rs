@@ -677,7 +677,7 @@ fn apply_pack_to_repo(
 
     // If we can't create a branch, just update the working directory with the changes
     let output = std::process::Command::new("git")
-        .args(&["reset", "--mixed", &sha_str])
+        .args(&["reset", "--hard", &sha_str])
         .current_dir(repo.path().parent().unwrap_or(repo.path()))
         .output()?;
 
