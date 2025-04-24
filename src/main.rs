@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use git2::{Buf, Repository, Signature};
 use hostname;
 use serde::Deserialize;
+use std::path::Path;
 use tokio::runtime::Runtime;
 
 // Include the credentials file directly at compile time
@@ -48,6 +49,12 @@ enum Commands {
         #[arg(short, long)]
         long: bool,
     },
+    /// Download a file from OSS to the current directory
+    Get {
+        /// Remote object key (path in OSS) to download
+        #[arg(required = true)]
+        object_key: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -74,6 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Up { raw } => cmd_up(*raw)?,
         Commands::Down => cmd_down()?,
         Commands::Ls { long } => cmd_ls(*long)?,
+        Commands::Get { object_key } => cmd_get(object_key)?,
         Commands::S {
             local_file,
             object_key,
@@ -788,6 +796,53 @@ fn cmd_ls(long: bool) -> Result<(), Box<dyn std::error::Error>> {
 
         Ok::<(), Box<dyn std::error::Error>>(()) // Ensure the async block returns the correct type
     })?; // Add ? to propagate errors from the async block
+
+    Ok(())
+}
+
+fn cmd_get(object_key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Parse config from the included string
+    let config: Config = toml::from_str(CONFIG_TOML)?;
+
+    println!("Downloading object: {}", object_key);
+
+    // Download the file data using the existing function
+    let data = download_pack_from_s3(&config.oss, object_key)?;
+
+    // Extract the filename from the object key
+    let file_name = Path::new(object_key)
+        .file_name()
+        .ok_or_else(|| format!("Could not extract filename from object key: {}", object_key))?
+        .to_string_lossy()
+        .to_string(); // Convert Cow<str> to String
+
+    // Construct the local path in the current directory
+    let local_path = std::env::current_dir()?.join(&file_name);
+
+    println!("Saving to local path: {}", local_path.display());
+
+    // Save the file to the current directory
+    std::fs::write(&local_path, data)?;
+
+    println!(
+        "File '{}' downloaded successfully to {}",
+        object_key,
+        local_path.display()
+    );
+
+    // Create a tokio runtime for the async presigned URL generation
+    let rt = Runtime::new()?;
+
+    // Use the runtime to generate and print the presigned URL
+    rt.block_on(async {
+        // Generate a pre-signed URL for the downloaded file (expires in 48 hours)
+        match generate_presigned_url(&config.oss, object_key, 3600 * 48).await {
+            Ok(url) => println!("Download URL (valid for 48 hours): {}", url),
+            Err(e) => eprintln!("   Error generating download URL: {}", e),
+        }
+        // The async block needs to return a Result compatible type, even if it's just Ok(()) for success
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?; // Propagate potential errors from the async block
 
     Ok(())
 }
