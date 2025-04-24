@@ -3,6 +3,7 @@ use aes_gcm::{
     Aes256Gcm, Key,
 };
 use aws_sdk_s3::config::Region;
+use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
 use aws_sdk_s3::Client;
 use clap::{Parser, Subcommand};
 use git2::{Buf, Repository, Signature};
@@ -41,6 +42,12 @@ enum Commands {
         #[arg(required = false)]
         object_key: Option<String>,
     },
+    /// List all files in the bucket with download links
+    Ls {
+        /// Show download URLs along with file names
+        #[arg(short, long)]
+        long: bool,
+    },
 }
 
 #[derive(Deserialize)]
@@ -64,8 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Up { raw } => cmd_up(*raw),
-        Commands::Down => cmd_down(),
+        Commands::Up { raw } => cmd_up(*raw)?,
+        Commands::Down => cmd_down()?,
+        Commands::Ls { long } => cmd_ls(*long)?,
         Commands::S {
             local_file,
             object_key,
@@ -88,9 +96,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
 
-            cmd_s(local_file, &key)
+            cmd_s(local_file, &key)?
         }
     }
+    Ok(()) // Ensure main returns Ok(()) at the end
 }
 
 fn cmd_up(raw: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -227,9 +236,16 @@ fn cmd_up(raw: bool) -> Result<(), Box<dyn std::error::Error>> {
             size_str, pack_file_name
         );
 
-        // Generate a pre-signed URL for the uploaded file (expires in 1 hour)
-        let presigned_url = generate_presigned_url(&config.oss, &pack_file_name, 3600 * 48)?;
-        println!("Download URL (valid for 48 hours): {}", presigned_url);
+        // Create a tokio runtime for async operations only when needed
+        let rt = Runtime::new()?;
+        // Use the runtime to execute our async function for presigned URL
+        rt.block_on(async {
+            // Generate a pre-signed URL for the uploaded file (expires in 48 hours)
+            let presigned_url =
+                generate_presigned_url(&config.oss, &pack_file_name, 3600 * 48).await?;
+            println!("Download URL (valid for 48 hours): {}", presigned_url);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })?;
     } else {
         // For encrypted pack files, prepend SHA and encrypt before uploading
         let mut pack_data_with_sha = staged_commit_sha.into_bytes();
@@ -255,9 +271,16 @@ fn cmd_up(raw: bool) -> Result<(), Box<dyn std::error::Error>> {
             size_str, pack_file_name
         );
 
-        // Generate a pre-signed URL for the uploaded file (expires in 1 hour)
-        let presigned_url = generate_presigned_url(&config.oss, &pack_file_name, 3600 * 48)?;
-        println!("Download URL (valid for 48 hours): {}", presigned_url);
+        // Create a tokio runtime for async operations only when needed
+        let rt = Runtime::new()?;
+        // Use the runtime to execute our async function for presigned URL
+        rt.block_on(async {
+            // Generate a pre-signed URL for the uploaded file (expires in 48 hours)
+            let presigned_url =
+                generate_presigned_url(&config.oss, &pack_file_name, 3600 * 48).await?;
+            println!("Download URL (valid for 48 hours): {}", presigned_url);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })?;
     }
 
     Ok(())
@@ -333,9 +356,15 @@ fn cmd_s(local_file: &str, object_key: &str) -> Result<(), Box<dyn std::error::E
         object_key
     );
 
-    // Generate a pre-signed URL for the uploaded file (expires in 48 hours)
-    let presigned_url = generate_presigned_url(&config.oss, object_key, 3600 * 48)?;
-    println!("Download URL (valid for 48 hours): {}", presigned_url);
+    // Create a tokio runtime for async operations only when needed
+    let rt = Runtime::new()?;
+    // Use the runtime to execute our async function for presigned URL
+    rt.block_on(async {
+        // Generate a pre-signed URL for the uploaded file (expires in 48 hours)
+        let presigned_url = generate_presigned_url(&config.oss, object_key, 3600 * 48).await?;
+        println!("Download URL (valid for 48 hours): {}", presigned_url);
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
 
     Ok(())
 }
@@ -461,49 +490,45 @@ fn upload_pack_to_s3(
     })
 }
 
-fn generate_presigned_url(
+async fn generate_presigned_url(
     config: &OssConfig,
     file_name: &str,
     expires_in_seconds: u64,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // Create a tokio runtime for async operations
-    let rt = Runtime::new()?;
+    // No need for a separate runtime here, assumes it's called within one
 
-    // Use the runtime to execute our async function
-    rt.block_on(async {
-        // Create S3 client with proper credentials
-        let credentials_provider = aws_sdk_s3::config::Credentials::new(
-            &config.access_key_id,
-            &config.access_key_secret,
-            None,
-            None,
-            "Static",
-        );
+    // Create S3 client with proper credentials
+    let credentials_provider = aws_sdk_s3::config::Credentials::new(
+        &config.access_key_id,
+        &config.access_key_secret,
+        None,
+        None,
+        "Static",
+    );
 
-        let region = Region::new("cn-beijing");
-        let s3_config = aws_sdk_s3::Config::builder()
-            .region(region)
-            .endpoint_url(&config.endpoint)
-            .credentials_provider(credentials_provider)
-            .build();
+    let region = Region::new("cn-beijing");
+    let s3_config = aws_sdk_s3::Config::builder()
+        .region(region)
+        .endpoint_url(&config.endpoint)
+        .credentials_provider(credentials_provider)
+        .build();
 
-        // Create a presigner
-        let presigning_config = aws_sdk_s3::presigning::PresigningConfig::builder()
-            .expires_in(std::time::Duration::from_secs(expires_in_seconds))
-            .build()?;
+    // Create a presigner
+    let presigning_config = aws_sdk_s3::presigning::PresigningConfig::builder()
+        .expires_in(std::time::Duration::from_secs(expires_in_seconds))
+        .build()?;
 
-        let client = Client::from_conf(s3_config);
+    let client = Client::from_conf(s3_config);
 
-        // Generate a presigned URL for GetObject operation
-        let presigned_request = client
-            .get_object()
-            .bucket(&config.bucket_name)
-            .key(file_name)
-            .presigned(presigning_config)
-            .await?;
+    // Generate a presigned URL for GetObject operation
+    let presigned_request = client
+        .get_object()
+        .bucket(&config.bucket_name)
+        .key(file_name)
+        .presigned(presigning_config)
+        .await?;
 
-        Ok::<String, Box<dyn std::error::Error>>(presigned_request.uri().to_string())
-    })
+    Ok::<String, Box<dyn std::error::Error>>(presigned_request.uri().to_string())
 }
 
 fn download_pack_from_s3(
@@ -688,6 +713,81 @@ fn apply_pack_to_repo(
         )
         .into());
     }
+
+    Ok(())
+}
+
+async fn list_files_in_bucket(
+    config: &OssConfig,
+) -> Result<ListObjectsV2Output, Box<dyn std::error::Error>> {
+    // Create S3 client with proper credentials
+    let credentials_provider = aws_sdk_s3::config::Credentials::new(
+        &config.access_key_id,
+        &config.access_key_secret,
+        None,
+        None,
+        "Static",
+    );
+
+    let region = Region::new("cn-beijing"); // Consider making region configurable
+    let s3_config = aws_sdk_s3::Config::builder()
+        .region(region)
+        .endpoint_url(&config.endpoint)
+        .credentials_provider(credentials_provider)
+        .build();
+
+    let client = Client::from_conf(s3_config);
+
+    // List objects in the bucket
+    let resp = client
+        .list_objects_v2()
+        .bucket(&config.bucket_name)
+        .send()
+        .await?;
+
+    Ok(resp)
+}
+
+fn cmd_ls(long: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Parse config from the included string
+    let config: Config = toml::from_str(CONFIG_TOML)?;
+
+    // Create a tokio runtime for async operations
+    let rt = Runtime::new()?;
+
+    // Use the runtime to execute our async function
+    rt.block_on(async {
+        println!("Listing files in bucket: {}", config.oss.bucket_name);
+
+        // List files
+        let list_output = list_files_in_bucket(&config.oss).await?;
+
+        if let Some(contents) = list_output.contents {
+            if contents.is_empty() {
+                println!("Bucket is empty.");
+                return Ok(());
+            }
+            println!("Files:");
+            // Use futures::future::join_all for potential concurrency if needed
+            for object in contents {
+                if let Some(key) = object.key {
+                    if long {
+                        // Generate presigned URL (30 minutes = 1800 seconds)
+                        match generate_presigned_url(&config.oss, &key, 1800).await {
+                            Ok(url) => println!(" - {}: {}", key, url),
+                            Err(e) => eprintln!("   Error generating URL for {}: {}", key, e),
+                        }
+                    } else {
+                        println!(" - {}", key)
+                    }
+                }
+            }
+        } else {
+            println!("Bucket is empty or no contents found.");
+        }
+
+        Ok::<(), Box<dyn std::error::Error>>(()) // Ensure the async block returns the correct type
+    })?; // Add ? to propagate errors from the async block
 
     Ok(())
 }
