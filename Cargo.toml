@@ -9,3 +9,26 @@ toml = "0.8.10"
 serde = { version = "1.0", features = ["derive"] }
 aws-sdk-s3 = "0.31.0"
 tokio = { version = "1", features = ["full"] }
+clap = { version = "4.4", features = ["derive"] }
+aes-gcm = "0.10.3"
+base64 = "0.21.5"
+tempfile = "3.19.1"
+chrono = "0.4.40"
+hostname = "0.3.1"
+
+[profile.release]
+# Optimize for size rather than speed
+opt-level = "z"
+# Enable Link Time Optimization
+lto = true
+# Set the number of codegen units to 1 for better optimization
+codegen-units = 1
+# Strip debug symbols
+strip = true
+# Abort on panic rather than unwind, reduces binary size
+panic = "abort"
+# Disable debug information
+debug = false
+# Optimize dependencies
+[profile.release.package."*"]
+opt-level = "z"
