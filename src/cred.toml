@@ -1,0 +1,5 @@
+[oss]
+BucketName = "repository-packs"
+Endpoint = "https://oss-cn-beijing.aliyuncs.com"
+AccessKeyId = "LTAI5tHW87zsvmhotqKt85ti"
+AccessKeySecret = "S1240d8Cy3G5VQ3jmqr8vWvJpbINoP"
